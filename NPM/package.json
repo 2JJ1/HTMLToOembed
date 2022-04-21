@@ -1,0 +1,24 @@
+{
+  "name": "htmltooembed",
+  "version": "1.0.1",
+  "description": "Searches for embeddably links on HTML elements or text and replaces them with HTML embeds.",
+  "main": "htmltooembed.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/2JJ1/HTMLToOembed.git"
+  },
+  "keywords": [
+    "oembed",
+    "html",
+    "string"
+  ],
+  "author": "2JJ1",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/2JJ1/HTMLToOembed/issues"
+  },
+  "homepage": "https://github.com/2JJ1/HTMLToOembed#readme"
+}
