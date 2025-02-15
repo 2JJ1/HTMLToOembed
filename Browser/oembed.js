@@ -1,20 +1,42 @@
 //Replaces from DOM text nodes
 function replaceTextInDOM(element, pattern, replacement) {
-    for (let node of element.childNodes) {
+    let childNodes = Array.from(element.childNodes)
+    for(let i=childNodes.length-1; i>=0; i--){
+        let node = childNodes[i]
         switch (node.nodeType) {
             case window.Node.ELEMENT_NODE:
                 replaceTextInDOM(node, pattern, replacement);
                 break;
-            case window.Node.TEXT_NODE:
-                var txt = window.document.createElement("span");
-                txt.innerHTML = node.textContent.replace(pattern, replacement);
-                node.replaceWith(txt);
+            case window.Node.TEXT_NODE: {
+                if(!node.parentElement) continue
+                if(node.nodeValue === "\n") continue
+                let elem = document.createElement("span")
+                node.textContent = pFUtils.escapeHTML(node.textContent)
+                elem.innerHTML = node.textContent.replace(pattern, replacement)
+                node.replaceWith(elem)
                 break;
+            }
             case window.Node.DOCUMENT_NODE:
                 replaceTextInDOM(node, pattern, replacement);
         }
     }
 }
+
+function replaceAnchorInDOM(html, link, replacement) {
+    // Get all anchor tags in the document
+    const anchors = html.querySelectorAll('a');
+  
+    anchors.forEach(anchor => {
+        const href = anchor.getAttribute('href');
+
+        // Check if the href attribute points to an image
+        if (link == href) {
+            let elem = document.createElement("span")
+            elem.innerHTML = "<br>" + replacement
+            anchor.replaceWith(elem)
+        }
+    });
+  }
 
 /**
  * Searches for links in the HTML and replaces it with an image tag
@@ -22,104 +44,115 @@ function replaceTextInDOM(element, pattern, replacement) {
  * @param options An object which contains your options
  */
 async function HTMLToOembed(html, options){
-    var matches
-
     //Default options
     options = options || {}
 
-    // Image embeding
+    let trustedDirectLinks = [
+        /https:\/\/(.+\.)?giphy\.com/i,
+        /https:\/\/(.+\.)?tenor\.com/i,
+        /https:\/\/streamable\.com/,
+        /https:\/\/(.+\.)?redd\.it/i,
+        /https:\/\/(i\.)?imgur\.com/i,
+        /https:\/\/(i\.)?gyazo\.com/i,
+        /https:\/\/(www\.)?roblox\.com/i,
+        /https:\/\/(cdn|media)\.discordapp\.(com|net)/i,
+        /https:\/\/media\.discordapp\.net/i,
+        new RegExp("https?:\/\/([a-zA-Z0-9-]*\.)?" + document.location.origin.replace(/^[^.]+\./g, ""), "i"),
+    ]
 
-    //Converts gyazo links to img tags
-    options.gyazo = "gyazo" in options ? options.gyazo : true
-    if(options.gyazo){
-        matches = html.innerHTML.matchAll(/https:\/\/gyazo.com\/\w*/g)
-        for (const match of matches) {
-            embedResponse = await fetch(`https://api.gyazo.com/api/oembed?url=${match[0]}`)
-            .then(res => res.json())
-            .catch(e=>{console.log(e)})
+    //Merges trusted links with received whitelist
+    if (typeof options.fileDomainWhitelist === "object") options.fileDomainWhitelist.concat(trustedDirectLinks)
+    //Uses supplied trusted whitelist only
+    else if(typeof options.fileDomainWhitelist === "boolean") options.fileDomainWhitelist = trustedDirectLinks
+
+    //Setup
+    let fromString = typeof html === 'string'
+
+    //In case of a bug, we don't want to fail to display the content
+    //Let alone halt the entire web page
+    try {
+        //Get all links
+        //Regex considers html encoding
+        let links = (fromString ? html : html.textContent).match(/https:\/\/[a-z0-9\-_]+\.[a-z0-9\-_]+[a-z0-9\-_\/\.\?\&=;]+/ig)
+        links = [...new Set(links)]
+        if(!fromString) links.push(...[...html.querySelectorAll('a')].map(anchor => anchor.href))
+        for(let link of links){
+            let replacement
+
+            // Image embeding
+
+            //Converts direct image links to img tags
+            if(
+                //Check that this option is not disabled
+                "imgFile" in options ? options.imgFile : true
+                //Check if is image link
+                && /\/[a-z0-9\-_]+\.(jpg|jpeg|png|gif|webp)/i.test(link)
+            ){
+                //If a whitelist is specified, check if the matched URL's domain is whitelisted
+                if("fileDomainWhitelist" in options){
+                    //Do not convert this match because it is not a whitelisted domain
+                    if(!options.fileDomainWhitelist.find(domain => link.match(domain))) continue
+                }
+
+                //Inserts embed; Replaces image link with img tag
+                replacement = `<img src="${link}"/>`
+            }
+
+            //Converts video links to img tags
+            else if(
+                "videoFile" in options ? options.videoFile : true
+                //Check if is video link
+                && /\/[a-z0-9\-_]+\.(mp4|mov)/i.test(link)
+            ){
+                    //If a whitelist is specified, check if the matched URL's domain is whitelisted
+                if("fileDomainWhitelist" in options){
+                    //Do not convert this match because it is not a whitelisted domain
+                    if(!options.fileDomainWhitelist.find(domain => link.match(domain))) continue
+                }
+
+                //Inserts embed; Replaces image link with img tag
+                replacement = `<video controls controlsList="nodownload" preload="none">
+                    <source src="${link}" type="video/mp4">
+                    Your browser does not support the video tag.
+                </video>`
+            }
+
+            //Embeds Streamable.com links
+            else if(
+                "streamable" in options ? options.streamable : true
+                //Check if is streamable.com link
+                && /https:\/\/streamable.com\/(\w*)/i.test(link)
+            ){
+                let embedResponse = await fetch(`https://api.streamable.com/oembed.json?url=${link}`)
+                .then(res => res.json())
+                .catch(e=>{})
+                if(!embedResponse) continue
+
+                if(!embedResponse) embedResponse = {html: '<span class="red">[Dead Streamable Link]</span>'}
+
+                replacement = embedResponse.html
+            }
+
+            //Defaults to embedding as plain link
+            //Wraps in anchor tag
+            else if("links" in options ? options.links : true){
+                //Inserts embed; Replaces image link with img tag
+                replacement = `<a href="${link}">${link}</a>`
+            }
+
+            let rxString = link.replaceAll(".", "\\.").replaceAll("?", "\\?")
+            if(!fromString) rxString = pFUtils.escapeHTML(rxString)
+            let rx = new RegExp(rxString, 'g')
             
-            // Inserts embed
-            //Embeds gifs
-            if(embedResponse.html){
-                let rx = new RegExp(match[0])
-                replaceTextInDOM(html, rx, embedResponse.html)
-            }
-            //Converts images to img tags
-            else{
-                let rx = new RegExp(match[0])
-                let newTag = `<img src="${embedResponse.url}"/>`
-                replaceTextInDOM(html, rx, newTag)
+            if(fromString) html = html.replaceAll(rx, replacement)
+            else {
+                replaceTextInDOM(html, rx, replacement)
+                replaceAnchorInDOM(html, link, replacement)
             }
         }
     }
-
-    //Converts image links to img tags
-    options.imgFile = "imgFile" in options ? options.imgFile : true
-    if(options.imgFile){
-        matches = html.innerHTML.matchAll(/https:\/\/([a-z\-_0-9\/\:\.]*\.(jpg|jpeg|png|gif))/ig)
-        for (const match of matches) {
-            //If a whitelist is specified, check if the matched URL's domain is whitelisted
-            if("fileDomainWhitelist" in options){
-                //Do not convert this match because it is not a whitelisted domain
-                if(!options.fileDomainWhitelist.find(domain => match[0].match(domain))) continue
-            }
-
-            //Inserts embed; Replaces image link with img tag
-            let rx = new RegExp(match[0])
-            replaceTextInDOM(html, rx, `<img src="${match[0]}"/>`)
-        }
+    catch(e) {
+        console.error(e)
     }
-
-    //Converts video links to img tags
-    options.videoFile = "videoFile" in options ? options.videoFile : true
-    if(options.videoFile){
-        matches = html.innerHTML.matchAll(/https:\/\/([a-z\-_0-9\/\:\.]*\.(mp4))/ig)
-        for (const match of matches) {
-            //If a whitelist is specified, check if the matched URL's domain is whitelisted
-            if("fileDomainWhitelist" in options){
-                //Do not convert this match because it is not a whitelisted domain
-                if(!options.fileDomainWhitelist.find(domain => match[0].match(domain))) continue
-            }
-
-            //Inserts embed; Replaces image link with img tag
-            let rx = new RegExp(match[0])
-            replaceTextInDOM(html, rx, 
-`<video controls controlsList="nodownload" preload="none">
-    <source src="${match[0]}" type="video/mp4">
-    Your browser does not support the video tag.
-</video>`)
-        }
-    }
-
-    // Platform embeds
-
-    //Embeds Imgur links. Should turn this into a plain image tag if I can figure out how to extract the image
-    options.imgur = "imgur" in options ? options.imgur : true
-    if(options.imgur){
-        matches = html.innerHTML.matchAll(/https:\/\/imgur.com\/(a|gallery)\/(\w*)/g)
-        for (const match of matches) {
-            embedResponse = await fetch(`https://api.imgur.com/oembed?url=${match[0]}`)
-            .then(res => res.json())
-            .catch(e=>{})
-
-            //Inserts embed
-            let rx = new RegExp(match[0])
-            replaceTextInDOM(html, rx, embedResponse.html)
-        }
-    }
-
-    //Embeds Codepen pens
-    options.codepen = "codepen" in options ? options.codepen : true
-    if(options.codepen){
-        matches = html.innerHTML.matchAll(/https:\/\/codepen.io\/[a-z\-_0-9\/\:\.]*\/pen\/\w*/g)
-        for (const match of matches) {
-            embedResponse = await fetch(`http://codepen.io/api/oembed?format=json&url=${match[0]}`)
-            .then(res => res.json())
-            .catch(e=>{})
-
-            //Inserts embed
-            let rx = new RegExp(match[0])
-            replaceTextInDOM(html, rx, embedResponse.html)
-        }
-    }
+    if(fromString) return html
 }
